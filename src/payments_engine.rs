@@ -1,48 +1,48 @@
-use std::collections::HashMap;
-use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
+use std::io::ErrorKind;
 
 use crate::client::Client;
 use crate::transaction::{self, Transaction, Type};
-
-type client_id = u16;
-type transaction_id = u64;
-
-type amount = f32;
+use crate::types::{Amount, ClientId, TransactionId};
 
 struct TransactionsDatabase {
-    transactions: HashMap<client_id, HashMap<transaction_id, amount>>,
-    //disputes: HashMap<u16, u32>, makes this sense here????
+    transactions: HashMap<ClientId, HashMap<TransactionId, Amount>>,
 }
 
 impl TransactionsDatabase {
     pub fn new() -> Self {
         Self {
             transactions: HashMap::new(),
-            //disputes: HashMap::new(),
         }
     }
 
-    pub fn insert_transaction(&mut self, t_client_id: u16, transaction_id: u64, amount: f32) {
-        let transaction = self
-            .transactions
-            .entry(t_client_id)
-            .or_insert(HashMap::new());
+    pub fn insert_transaction(
+        &mut self,
+        t_client_id: ClientId,
+        transaction_id: TransactionId,
+        amount: Amount,
+    ) {
+        let transaction = self.transactions.entry(t_client_id).or_default();
         transaction.insert(transaction_id, amount);
     }
 
-    pub fn read_transaction_amount(&mut self, t_client_id: u16, transaction_id: u64) -> f32 {
-        self.transactions
-            .get(&t_client_id)
-            .unwrap()
-            .get(&transaction_id)
-            .unwrap()
-            .clone()
+    pub fn read_transaction_amount(
+        &mut self,
+        t_client_id: ClientId,
+        transaction_id: TransactionId,
+    ) -> Result<Option<Amount>, ErrorKind> {
+        let transaction = self.transactions.get(&t_client_id);
+        match transaction {
+            Some(transaction) => Ok(transaction.get(&transaction_id).copied()),
+            None => Err(ErrorKind::NotFound),
+        }
     }
 }
 
 pub struct PaymentsEngine {
-    clients: HashMap<client_id, Client>,
+    clients: HashMap<ClientId, Client>,
     transactions_database: TransactionsDatabase,
+    disputes: HashSet<TransactionId>,
 }
 
 impl PaymentsEngine {
@@ -50,25 +50,32 @@ impl PaymentsEngine {
         Self {
             clients: HashMap::new(),
             transactions_database: TransactionsDatabase::new(),
+            disputes: HashSet::new(),
         }
     }
 
     pub async fn handle_transaction(&mut self, transaction: Transaction) {
         match transaction.t_type {
-            Type::Deposit => {
-                self.handle_deposit(
-                    transaction.t_client_id,
-                    transaction.transaction_id,
-                    transaction.amount,
-                );
-            }
-            Type::Withdrawal => {
-                self.handle_withdrawal(
-                    transaction.t_client_id,
-                    transaction.transaction_id,
-                    transaction.amount,
-                );
-            }
+            Type::Deposit => match transaction.amount {
+                Some(transaction_value) => {
+                    self.handle_deposit(
+                        transaction.t_client_id,
+                        transaction.transaction_id,
+                        transaction_value.round_dp(4),
+                    );
+                }
+                None => {}
+            },
+            Type::Withdrawal => match transaction.amount {
+                Some(transaction_value) => {
+                    self.handle_withdrawal(
+                        transaction.t_client_id,
+                        transaction.transaction_id,
+                        transaction_value.round_dp(4),
+                    );
+                }
+                None => {}
+            },
             Type::Dispute => {
                 self.handle_dispute(transaction.t_client_id, transaction.transaction_id);
             }
@@ -81,46 +88,85 @@ impl PaymentsEngine {
         }
     }
 
-    fn handle_deposit(&mut self, t_client_id: u16, transaction_id: u64, amount: f32) {
+    fn handle_deposit(
+        &mut self,
+        t_client_id: ClientId,
+        transaction_id: TransactionId,
+        amount: Amount,
+    ) {
         let client = self.clients.entry(t_client_id).or_insert(Client::new());
 
-        client.deposit(amount);
+        if !client.locked() {
+            client.deposit(amount);
 
-        self.transactions_database
-            .insert_transaction(t_client_id, transaction_id, amount);
+            self.transactions_database
+                .insert_transaction(t_client_id, transaction_id, amount);
+        }
     }
 
-    fn handle_withdrawal(&mut self, t_client_id: u16, transaction_id: u64, amount: f32) {
+    fn handle_withdrawal(
+        &mut self,
+        t_client_id: ClientId,
+        transaction_id: TransactionId,
+        amount: Amount,
+    ) {
         let client = self.clients.entry(t_client_id).or_insert(Client::new());
 
-        client.withdrawal(amount);
+        if !client.locked() {
+            client.withdrawal(amount);
 
-        self.transactions_database
-            .insert_transaction(t_client_id, transaction_id, amount);
+            self.transactions_database
+                .insert_transaction(t_client_id, transaction_id, amount);
+        }
     }
 
-    fn handle_dispute(&mut self, t_client_id: u16, transaction_id: u64) {
-        let amount = self
+    fn handle_dispute(&mut self, t_client_id: ClientId, transaction_id: TransactionId) {
+        match self
             .transactions_database
-            .read_transaction_amount(t_client_id, transaction_id);
-        self.clients.get_mut(&t_client_id).unwrap().dispute(amount);
+            .read_transaction_amount(t_client_id, transaction_id)
+        {
+            Ok(Some(amount)) => {
+                let client = self.clients.get_mut(&t_client_id).unwrap();
+                client.dispute(amount);
+                self.disputes.insert(transaction_id);
+            }
+            Ok(None) => {}
+            Err(_) => {}
+        }
     }
 
-    fn handle_resolve(&mut self, t_client_id: u16, transaction_id: u64) {
-        let amount = self
-            .transactions_database
-            .read_transaction_amount(t_client_id, transaction_id);
-        self.clients.get_mut(&t_client_id).unwrap().resolve(amount);
+    fn handle_resolve(&mut self, t_client_id: ClientId, transaction_id: TransactionId) {
+        if self.disputes.contains(&transaction_id) {
+            match self
+                .transactions_database
+                .read_transaction_amount(t_client_id, transaction_id)
+            {
+                Ok(Some(amount)) => {
+                    let client = self.clients.get_mut(&t_client_id).unwrap();
+                    client.resolve(amount);
+                    self.disputes.remove(&transaction_id);
+                }
+                Ok(None) => {}
+                Err(_) => {}
+            }
+        }
     }
 
-    fn handle_chargeback(&mut self, t_client_id: u16, transaction_id: u64) {
-        let amount = self
-            .transactions_database
-            .read_transaction_amount(t_client_id, transaction_id);
-        self.clients
-            .get_mut(&t_client_id)
-            .unwrap()
-            .chargeback(amount);
+    fn handle_chargeback(&mut self, t_client_id: ClientId, transaction_id: TransactionId) {
+        if self.disputes.contains(&transaction_id) {
+            match self
+                .transactions_database
+                .read_transaction_amount(t_client_id, transaction_id)
+            {
+                Ok(Some(amount)) => {
+                    let client = self.clients.get_mut(&t_client_id).unwrap();
+                    client.chargeback(amount);
+                    self.disputes.remove(&transaction_id);
+                }
+                Ok(None) => {}
+                Err(_) => {}
+            }
+        }
     }
 
     pub async fn write_state(&self) {
@@ -128,7 +174,11 @@ impl PaymentsEngine {
         for (id, client) in &self.clients {
             println!(
                 "{},{},{},{},{}",
-                id, client.available, client.held, client.total, client.locked
+                id,
+                client.available(),
+                client.held(),
+                client.total(),
+                client.locked()
             );
         }
     }

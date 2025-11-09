@@ -1,6 +1,7 @@
 mod client;
 mod payments_engine;
 mod transaction;
+mod types;
 
 use clap::{Arg, ArgAction, Command};
 
@@ -19,11 +20,11 @@ async fn start_transactions_service(filename: &str) -> Result<(), Box<dyn std::e
         .delimiter(b',')
         .from_reader(buffered);
 
-    let mut iter = rdr.deserialize();
+    let iter = rdr.deserialize();
 
     let mut payments_engine = PaymentsEngine::new();
 
-    while let Some(transaction_result) = iter.next() {
+    for transaction_result in iter {
         let transaction: Transaction = transaction_result.unwrap();
         payments_engine.handle_transaction(transaction).await;
     }

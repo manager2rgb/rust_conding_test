@@ -1,6 +1,18 @@
-use rust_decimal::dec;
-
 use crate::types::Amount;
+use rust_decimal::Decimal;
+use thiserror::Error;
+
+#[derive(Error, Debug, Clone, PartialEq, Eq)]
+pub enum ClientAccountError {
+    #[error("Negative amount")]
+    NegativeAmount,
+
+    #[error("Insufficient available for withdrawal")]
+    InsufficientBalance,
+
+    #[error("Account is locked")]
+    Locked,
+}
 
 pub struct Client {
     available: Amount,
@@ -12,9 +24,9 @@ pub struct Client {
 impl Client {
     pub fn new() -> Self {
         Self {
-            available: dec!(0_0000),
-            held: dec!(0_0000),
-            total: dec!(0_0000),
+            available: Decimal::ZERO,
+            held: Decimal::ZERO,
+            total: Decimal::ZERO,
             locked: false,
         }
     }
@@ -35,40 +47,73 @@ impl Client {
         self.locked
     }
 
-    pub fn deposit(&mut self, amount: Amount) {
+    pub fn deposit(&mut self, amount: Amount) -> Result<(), ClientAccountError> {
+        if self.locked {
+            return Err(ClientAccountError::Locked);
+        }
+
+        if amount < Decimal::ZERO {
+            return Err(ClientAccountError::NegativeAmount);
+        }
+
         self.available += amount;
         self.total += amount;
+        Ok(())
     }
 
-    pub fn withdrawal(&mut self, amount: Amount) {
-        if self.available >= amount {
+    pub fn withdrawal(&mut self, amount: Amount) -> Result<(), ClientAccountError> {
+        if self.locked {
+            return Err(ClientAccountError::Locked);
+        }
+
+        if amount < Decimal::ZERO {
+            return Err(ClientAccountError::NegativeAmount);
+        }
+
+        if self.available > amount {
             // meaning susfficient or equal amount of money
             self.available -= amount;
             self.total -= amount;
+        } else {
+            return Err(ClientAccountError::InsufficientBalance);
         }
+
+        Ok(())
     }
 
-    pub fn dispute(&mut self, amount: Amount) {
+    pub fn dispute(&mut self, amount: Amount) -> Result<(), ClientAccountError> {
+        if self.locked {
+            return Err(ClientAccountError::Locked);
+        }
+
         self.available -= amount; // clients available funds should decrease by the amount disputed
         self.held += amount; // their held funds should increase by the amount disputed
+
+        Ok(())
     }
 
-    pub fn resolve(&mut self, amount: Amount) {
+    pub fn resolve(&mut self, amount: Amount) -> Result<(), ClientAccountError> {
+        if self.locked {
+            return Err(ClientAccountError::Locked);
+        }
         self.held -= amount; // clients held funds should decrease by the amount no longer disputed
         self.available += amount; // available funds should increase by the amount no longer disputed
+        Ok(())
     }
 
-    pub fn chargeback(&mut self, amount: Amount) {
+    pub fn chargeback(&mut self, amount: Amount) -> Result<(), ClientAccountError> {
         // clients held funds and total funds should decrease by the amount previously disputed.
         self.held -= amount;
         self.total -= amount;
         self.locked = true; //  If a chargeback occurs the client's account should be immediately frozen
+        Ok(())
     }
 }
 
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    use rust_decimal::dec;
 
     #[test]
     fn client() {
@@ -84,7 +129,7 @@ pub mod tests {
     fn client_deposit() {
         let mut client = Client::new();
 
-        client.deposit(dec!(1.5555));
+        assert!(client.deposit(dec!(1.5555)).is_ok());
         assert_eq!(client.available(), dec!(1.5555));
         assert_eq!(client.held(), dec!(0_0000));
         assert_eq!(client.total(), dec!(1.5555));
@@ -92,43 +137,87 @@ pub mod tests {
     }
 
     #[test]
+    fn client_deposit_error() {
+        let mut client = Client {
+            available: Decimal::ZERO,
+            held: Decimal::ZERO,
+            total: Decimal::ZERO,
+            locked: true,
+        };
+
+        assert_eq!(
+            client.deposit(dec!(1.5555)).unwrap_err(),
+            ClientAccountError::Locked
+        );
+        client.locked = false;
+        assert_eq!(
+            client.deposit(dec!(-1)).unwrap_err(),
+            ClientAccountError::NegativeAmount
+        );
+    }
+
+    #[test]
     fn client_withdrawal() {
         let mut client = Client::new();
 
-        client.deposit(dec!(1.5555));
+        assert!(client.deposit(dec!(1.5555)).is_ok());
 
-        client.withdrawal(dec!(0.5555));
+        assert!(client.withdrawal(dec!(0.5555)).is_ok());
         assert_eq!(client.available(), dec!(1.000));
         assert_eq!(client.held(), dec!(0_0000));
         assert_eq!(client.total(), dec!(1.0000));
         assert!(!client.locked());
 
-        client.withdrawal(dec!(0.9999));
+        assert!(client.withdrawal(dec!(0.9999)).is_ok());
         assert_eq!(client.available(), dec!(0.0001));
         assert_eq!(client.held(), dec!(0_0000));
         assert_eq!(client.total(), dec!(0.0001));
         assert!(!client.locked());
 
-        client.withdrawal(dec!(0.0002)); //insufficient money
+        assert!(client.withdrawal(dec!(0.0002)).is_err()); //insufficient money error
         assert_eq!(client.available(), dec!(0.0001));
         assert_eq!(client.held(), dec!(0_0000));
         assert_eq!(client.total(), dec!(0.0001));
         assert!(!client.locked());
+    }
+
+    #[test]
+    fn client_withdrawal_error() {
+        let mut client = Client {
+            available: dec!(1.0000),
+            held: Decimal::ZERO,
+            total: Decimal::ZERO,
+            locked: true,
+        };
+
+        assert_eq!(
+            client.withdrawal(dec!(1.5555)).unwrap_err(),
+            ClientAccountError::Locked
+        );
+        client.locked = false;
+        assert_eq!(
+            client.withdrawal(dec!(-1)).unwrap_err(),
+            ClientAccountError::NegativeAmount
+        );
+        assert_eq!(
+            client.withdrawal(Decimal::MAX).unwrap_err(),
+            ClientAccountError::InsufficientBalance
+        );
     }
 
     #[test]
     fn client_dispute() {
         let mut client = Client::new();
 
-        client.deposit(dec!(1.5555));
+        assert!(client.deposit(dec!(1.5555)).is_ok());
 
-        client.dispute(dec!(0.5555));
+        assert!(client.dispute(dec!(0.5555)).is_ok());
         assert_eq!(client.available(), dec!(1.0000));
         assert_eq!(client.held(), dec!(0.5555));
         assert_eq!(client.total(), dec!(1.5555));
         assert!(!client.locked());
 
-        client.withdrawal(dec!(0.9999));
+        assert!(client.withdrawal(dec!(0.9999)).is_ok());
         assert_eq!(client.available(), dec!(0.0001));
         assert_eq!(client.held(), dec!(0.5555));
         assert_eq!(client.total(), dec!(0.5556));
@@ -136,24 +225,39 @@ pub mod tests {
     }
 
     #[test]
+    fn client_dispute_error() {
+        let mut client = Client {
+            available: Decimal::ZERO,
+            held: Decimal::ZERO,
+            total: Decimal::ZERO,
+            locked: true,
+        };
+
+        assert_eq!(
+            client.dispute(dec!(1.5555)).unwrap_err(),
+            ClientAccountError::Locked
+        );
+    }
+
+    #[test]
     fn client_resolve() {
         let mut client = Client::new();
 
-        client.deposit(dec!(1.5555));
+        assert!(client.deposit(dec!(1.5555)).is_ok());
 
-        client.dispute(dec!(0.5555));
+        assert!(client.dispute(dec!(0.5555)).is_ok());
         assert_eq!(client.available(), dec!(1.0000));
         assert_eq!(client.held(), dec!(0.5555));
         assert_eq!(client.total(), dec!(1.5555));
         assert!(!client.locked());
 
-        client.withdrawal(dec!(0.9999));
+        assert!(client.withdrawal(dec!(0.9999)).is_ok());
         assert_eq!(client.available(), dec!(0.0001));
         assert_eq!(client.held(), dec!(0.5555));
         assert_eq!(client.total(), dec!(0.5556));
         assert!(!client.locked());
 
-        client.resolve(dec!(0.5555));
+        assert!(client.resolve(dec!(0.5555)).is_ok());
         assert_eq!(client.available(), dec!(0.5556));
         assert_eq!(client.held(), dec!(0.0000));
         assert_eq!(client.total(), dec!(0.5556));
@@ -161,24 +265,39 @@ pub mod tests {
     }
 
     #[test]
+    fn client_resolve_error() {
+        let mut client = Client {
+            available: Decimal::ZERO,
+            held: Decimal::ZERO,
+            total: Decimal::ZERO,
+            locked: true,
+        };
+
+        assert_eq!(
+            client.resolve(dec!(1.5555)).unwrap_err(),
+            ClientAccountError::Locked
+        );
+    }
+
+    #[test]
     fn client_chargeback() {
         let mut client = Client::new();
 
-        client.deposit(dec!(1.5555));
+        assert!(client.deposit(dec!(1.5555)).is_ok());
 
-        client.dispute(dec!(0.5555));
+        assert!(client.dispute(dec!(0.5555)).is_ok());
         assert_eq!(client.available(), dec!(1.0000));
         assert_eq!(client.held(), dec!(0.5555));
         assert_eq!(client.total(), dec!(1.5555));
         assert!(!client.locked());
 
-        client.withdrawal(dec!(0.9999));
+        assert!(client.withdrawal(dec!(0.9999)).is_ok());
         assert_eq!(client.available(), dec!(0.0001));
         assert_eq!(client.held(), dec!(0.5555));
         assert_eq!(client.total(), dec!(0.5556));
         assert!(!client.locked());
 
-        client.chargeback(dec!(0.5555));
+        assert!(client.chargeback(dec!(0.5555)).is_ok());
         assert_eq!(client.available(), dec!(0.0001));
         assert_eq!(client.held(), dec!(0.0000));
         assert_eq!(client.total(), dec!(0.0001));

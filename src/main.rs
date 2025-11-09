@@ -30,9 +30,14 @@ async fn start_transactions_service(filename: String) -> Result<(), ()> {
         match transaction_result {
             Ok(transaction) => {
                 let mut payments_engine = PAYMENTS_ENGINE.lock().await;
-                payments_engine.handle_transaction(transaction)
+                match payments_engine.handle_transaction(transaction) {
+                    Ok(_) => {}
+                    Err(err) => {
+                        eprintln!("Engine error : {}", err);
+                    }
+                }
             }
-            Err(err) => eprintln!("Error deserializing transaction: {}", err.to_string()),
+            Err(err) => eprintln!("Error deserializing transaction: {}", err),
         }
     }
     Ok(())
@@ -63,8 +68,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     set.join_all().await;
 
     let payments_engine = PAYMENTS_ENGINE.lock().await;
-    let output = payments_engine.write_state();
-    print!("{}", output);
+    match payments_engine.write_state() {
+        Ok(output) => {
+            print!("{}", output);
+        }
+        Err(err) => {
+            eprintln!("Engine error : {}", err);
+        }
+    }
 
     Ok(())
 }

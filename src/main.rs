@@ -26,9 +26,10 @@ async fn start_transactions_service(filename: &str) -> Result<(), Box<dyn std::e
 
     for transaction_result in iter {
         let transaction: Transaction = transaction_result.unwrap();
-        payments_engine.handle_transaction(transaction).await;
+        payments_engine.handle_transaction(transaction);
     }
-    payments_engine.write_state().await;
+    let output = payments_engine.write_state();
+    print!("{}", output);
     Ok(())
 }
 

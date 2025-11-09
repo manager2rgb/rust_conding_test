@@ -99,7 +99,7 @@ pub mod tests {
 
     #[test]
     fn read_desposit_more_4_decimal() {
-        let csv_data = "deposit,1,2,10.55557\n";
+        let csv_data = "deposit,1,2,10.55557\n"; // 001000 accepeted?
 
         let mut rdr = csv::ReaderBuilder::new()
             .has_headers(false)

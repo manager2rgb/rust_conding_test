@@ -3,14 +3,19 @@ mod payments_engine;
 mod transaction;
 mod types;
 
+use std::sync::{Arc, LazyLock};
+use tokio::sync::Mutex;
+
 use clap::{Arg, ArgAction, Command};
+use tokio::task::JoinSet;
 
-use payments_engine::PaymentsEngine;
+static PAYMENTS_ENGINE: LazyLock<Arc<Mutex<payments_engine::PaymentsEngine>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(payments_engine::PaymentsEngine::new())));
 
-fn start_transactions_service(filename: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn start_transactions_service(filename: String) -> Result<(), ()> {
     let path = filename.trim();
 
-    let metadata_file = std::fs::OpenOptions::new().read(true).open(path)?;
+    let metadata_file = std::fs::OpenOptions::new().read(true).open(path).unwrap();
     let buffered = std::io::BufReader::new(metadata_file);
 
     let mut rdr = csv::ReaderBuilder::new()
@@ -21,20 +26,20 @@ fn start_transactions_service(filename: &str) -> Result<(), Box<dyn std::error::
 
     let iter = rdr.deserialize();
 
-    let mut payments_engine = PaymentsEngine::new();
-
     for transaction_result in iter {
         match transaction_result {
-            Ok(transaction) => payments_engine.handle_transaction(transaction),
-            Err(e) => eprintln!("Failed to parse transaction: {:?}", e),
+            Ok(transaction) => {
+                let mut payments_engine = PAYMENTS_ENGINE.lock().await;
+                payments_engine.handle_transaction(transaction)
+            }
+            Err(_) => return Err(()),
         }
     }
-    let output = payments_engine.write_state();
-    print!("{}", output);
     Ok(())
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut parser = Command::new("Payments Engine");
     parser = parser.arg(
         Arg::new("file")
@@ -49,9 +54,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args = parser.get_matches();
 
-    let filename = args.get_one::<String>("file").unwrap();
+    let filename = args.get_one::<String>("file").unwrap().clone();
 
-    start_transactions_service(filename)?;
+    let mut set = JoinSet::new();
+    set.spawn(start_transactions_service(filename));
+    set.spawn(start_transactions_service("transactions.csv".to_string())); //Just to test if it work as expected
+
+    set.join_all().await;
+
+    let payments_engine = PAYMENTS_ENGINE.lock().await;
+    let output = payments_engine.write_state();
+    print!("{}", output);
 
     Ok(())
 }

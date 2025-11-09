@@ -62,22 +62,35 @@ impl PaymentsEngine {
         match transaction.t_type {
             Type::Deposit => {
                 if let Some(transaction_value) = transaction.amount {
-                    self.handle_transaction_with_amount(
-                        transaction.t_client_id,
-                        transaction.transaction_id,
-                        transaction_value,
-                        |c, a| c.deposit(a),
-                    );
+                    let client = self
+                        .clients
+                        .entry(transaction.t_client_id)
+                        .or_insert(Client::new());
+                    if !client.locked() {
+                        client.deposit(transaction_value);
+                        self.transactions_database.insert_transaction(
+                            transaction.t_client_id,
+                            transaction.transaction_id,
+                            transaction_value,
+                        );
+                    }
                 }
             }
             Type::Withdrawal => {
                 if let Some(transaction_value) = transaction.amount {
-                    self.handle_transaction_with_amount(
-                        transaction.t_client_id,
-                        transaction.transaction_id,
-                        transaction_value,
-                        |c, a| c.withdrawal(a),
-                    );
+                    let client = self
+                        .clients
+                        .entry(transaction.t_client_id)
+                        .or_insert(Client::new());
+                    if !client.locked() {
+                        client.withdrawal(transaction_value);
+                        //ASSUME ONLY DEPOSITS CAN BE DISPUTED
+                        // self.transactions_database.insert_transaction(
+                        //     transaction.t_client_id,
+                        //     transaction.transaction_id,
+                        //     transaction_value,
+                        // );
+                    }
                 }
             }
             Type::Dispute => {
@@ -111,23 +124,6 @@ impl PaymentsEngine {
         }
     }
 
-    fn handle_transaction_with_amount<F>(
-        &mut self,
-        t_client_id: ClientId,
-        transaction_id: TransactionId,
-        amount: Amount,
-        action: F,
-    ) where
-        F: FnOnce(&mut Client, Amount),
-    {
-        let client = self.clients.entry(t_client_id).or_insert(Client::new());
-        if !client.locked() {
-            action(client, amount);
-            self.transactions_database
-                .insert_transaction(t_client_id, transaction_id, amount);
-        }
-    }
-
     fn handle_transaction_without_amount<F>(
         &mut self,
         t_client_id: ClientId,
@@ -136,21 +132,21 @@ impl PaymentsEngine {
     ) where
         F: FnOnce(&mut Client, Amount),
     {
-        if let Ok(amount) = self
-            .transactions_database
-            .read_transaction_amount(t_client_id, transaction_id)
+        if let Some(client) = self.clients.get_mut(&t_client_id)
+            && let Ok(amount) = self
+                .transactions_database
+                .read_transaction_amount(t_client_id, transaction_id)
         {
-            let client = self.clients.get_mut(&t_client_id).unwrap();
-            action(client, amount);
+            action(client, amount)
         }
     }
 
     pub fn write_state(&self) -> String {
         let mut buffer = String::new();
-        writeln!(&mut buffer, "client,available,held,total,locked").unwrap();
+        let _ = writeln!(&mut buffer, "client,available,held,total,locked");
 
         for (id, client) in &self.clients {
-            writeln!(
+            let _ = writeln!(
                 &mut buffer,
                 "{},{},{},{},{}",
                 id,
@@ -158,12 +154,14 @@ impl PaymentsEngine {
                 client.held(),
                 client.total(),
                 client.locked()
-            )
-            .unwrap();
+            );
         }
         buffer
     }
 }
+
+unsafe impl Send for PaymentsEngine {}
+unsafe impl Sync for PaymentsEngine {}
 
 #[cfg(test)]
 pub mod tests {

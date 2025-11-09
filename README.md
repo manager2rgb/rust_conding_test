@@ -5,11 +5,14 @@
 The exercise describes disputes in the context of reversing deposits: “a malicious actor may try to deposit fiat… and then reverse their fiat deposit”.  
 Because of this, I treat only deposit transactions as dispute.
 
-### 1.2 Amounts can not be negative
+### 1.2 Inputs amounts can not be negative
 A negative withdrawal or deposit does not make sense in this use case.  
 Negative amounts are rejected during deserialization.
 
-### 1.3 About efficiency
+### 1.3 Negative balance allowed
+Disputes of deposits can create negative available balance:
+
+### 1.4 About efficiency
 The coding test mentions a scenario where the engine could be receiving streams from thousands of concurrent TCP connections.  
 For this exercise, I used a `LazyLock` holding a `PaymentsEngine` wrapped in `Arc<Mutex<…>>`.  
 In a real system, I would consider per-client locking, or lock-free data structures, but due to time constraints and because this is a coding test, I kept the concurrency model simple and safe.

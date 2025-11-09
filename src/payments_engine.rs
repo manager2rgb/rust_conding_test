@@ -148,7 +148,7 @@ impl PaymentsEngine {
         for (id, client) in &self.clients {
             let _ = writeln!(
                 &mut buffer,
-                "{},{},{},{},{}",
+                "{},{:.4},{:.4},{:.4},{}",
                 id,
                 client.available(),
                 client.held(),
@@ -160,8 +160,8 @@ impl PaymentsEngine {
     }
 }
 
-unsafe impl Send for PaymentsEngine {}
-unsafe impl Sync for PaymentsEngine {}
+// unsafe impl Send for PaymentsEngine {}
+// unsafe impl Sync for PaymentsEngine {}
 
 #[cfg(test)]
 pub mod tests {

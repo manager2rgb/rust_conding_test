@@ -32,7 +32,7 @@ async fn start_transactions_service(filename: String) -> Result<(), ()> {
                 let mut payments_engine = PAYMENTS_ENGINE.lock().await;
                 payments_engine.handle_transaction(transaction)
             }
-            Err(_) => return Err(()),
+            Err(err) => eprintln!("Error deserializing transaction: {}", err.to_string()),
         }
     }
     Ok(())
@@ -58,7 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut set = JoinSet::new();
     set.spawn(start_transactions_service(filename));
-    set.spawn(start_transactions_service("transactions.csv".to_string())); //Just to test if it work as expected
+    //set.spawn(start_transactions_service("transactions.csv".to_string())); //Just to test if it work as expected
 
     set.join_all().await;
 

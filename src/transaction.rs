@@ -113,7 +113,7 @@ pub mod tests {
     fn read_wrong_type_transaction() {
         let mut rdr = csv::ReaderBuilder::new()
             .has_headers(false)
-            .from_reader("test,1,1,1.1\n".as_bytes());
+            .from_reader("invalid,1,2,50.0\n".as_bytes());
 
         let transaction = rdr.deserialize::<Transaction>().next().unwrap();
 

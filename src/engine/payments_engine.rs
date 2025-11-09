@@ -1,70 +1,15 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
-use thiserror::Error;
-
-use crate::client::{Client, ClientAccountError};
+use crate::storage::{TransactionType, TransactionsDatabase};
 use crate::transaction::{Transaction, Type};
 use crate::types::{Amount, ClientId, TransactionId};
+use crate::{client::client_account::ClientAccount, client::error::ClientAccountError};
 
-type TransactionType = (ClientId, Amount);
-
-struct TransactionsDatabase {
-    transactions: HashMap<TransactionId, TransactionType>,
-}
-
-impl TransactionsDatabase {
-    pub fn new() -> Self {
-        Self {
-            transactions: HashMap::new(),
-        }
-    }
-
-    fn insert(&mut self, transaction_id: TransactionId, transaction: TransactionType) {
-        self.transactions.insert(transaction_id, transaction);
-    }
-
-    fn get(&self, transaction_id: TransactionId) -> Option<TransactionType> {
-        self.transactions.get(&transaction_id).copied()
-    }
-
-    fn contains_key(&self, transaction_id: TransactionId) -> bool {
-        self.transactions.contains_key(&transaction_id)
-    }
-}
-
-#[derive(Error, Debug, PartialEq)]
-pub enum EngineError {
-    #[error("Client not found")]
-    ClientNotFound,
-
-    #[error("Client account error: {0}")]
-    ClientAccountError(#[from] ClientAccountError),
-
-    #[error("InvalidTransaction: {0}")]
-    InvalidTransaction(TransactionId),
-
-    #[error("Transaction not found: {0}")]
-    TransactionNotFound(TransactionId),
-
-    #[error("Transaction disputed already: {0}")]
-    TransactionAlreadyDisputed(TransactionId),
-
-    #[error("Transaction not disputed: {0}")]
-    TransactionNotDisputed(TransactionId),
-
-    #[error("Transaction with ID '{0}' is not owned by the client {1}")]
-    NotClientOwnedTransaction(TransactionId, ClientId),
-
-    #[error("Transaction exists")]
-    TransactionExists,
-
-    #[error("Error writing console")]
-    WriteBuffer,
-}
+use crate::engine::error::EngineError;
 
 pub struct PaymentsEngine {
-    clients: HashMap<ClientId, Client>,
+    clients: HashMap<ClientId, ClientAccount>,
     transactions_database: TransactionsDatabase,
     disputes: HashSet<TransactionId>,
 }
@@ -80,91 +25,100 @@ impl PaymentsEngine {
 
     pub fn handle_transaction(&mut self, transaction: Transaction) -> Result<(), EngineError> {
         match transaction.t_type {
-            Type::Deposit => {
-                if self
-                    .transactions_database
-                    .contains_key(transaction.transaction_id)
-                {
-                    return Err(EngineError::TransactionExists);
-                }
-                if let Some(transaction_value) = transaction.amount {
-                    let client = self
-                        .clients
-                        .entry(transaction.t_client_id)
-                        .or_insert(Client::new());
-
-                    client.deposit(transaction_value)?;
-
-                    let transaction_t: TransactionType =
-                        (transaction.t_client_id, transaction_value);
-                    self.transactions_database
-                        .insert(transaction.transaction_id, transaction_t);
-                    Ok(())
-                } else {
-                    Err(EngineError::InvalidTransaction(transaction.transaction_id))
-                }
-            }
-            Type::Withdrawal => {
-                if self
-                    .transactions_database
-                    .contains_key(transaction.transaction_id)
-                {
-                    return Err(EngineError::TransactionExists);
-                }
-                if let Some(transaction_value) = transaction.amount {
-                    let client = self
-                        .clients
-                        .entry(transaction.t_client_id)
-                        .or_insert(Client::new());
-                    client.withdrawal(transaction_value)?;
-                    Ok(())
-                } else {
-                    Err(EngineError::InvalidTransaction(transaction.transaction_id))
-                }
-            }
-            Type::Dispute => {
-                if self.disputes.contains(&transaction.transaction_id) {
-                    return Err(EngineError::TransactionAlreadyDisputed(
-                        transaction.transaction_id,
-                    ));
-                }
-                self.handle_transaction_without_amount(
-                    transaction.t_client_id,
-                    transaction.transaction_id,
-                    |c, a| c.dispute(a),
-                )?;
-                self.disputes.insert(transaction.transaction_id);
-                Ok(())
-            }
-            Type::Resolve => {
-                if !self.disputes.contains(&transaction.transaction_id) {
-                    return Err(EngineError::TransactionNotDisputed(
-                        transaction.transaction_id,
-                    ));
-                }
-                self.handle_transaction_without_amount(
-                    transaction.t_client_id,
-                    transaction.transaction_id,
-                    |c, a| c.resolve(a),
-                )?;
-                self.disputes.remove(&transaction.transaction_id);
-                Ok(())
-            }
-            Type::Chargeback => {
-                if !self.disputes.contains(&transaction.transaction_id) {
-                    return Err(EngineError::TransactionNotDisputed(
-                        transaction.transaction_id,
-                    ));
-                }
-                self.handle_transaction_without_amount(
-                    transaction.t_client_id,
-                    transaction.transaction_id,
-                    |c, a| c.chargeback(a),
-                )?;
-                self.disputes.remove(&transaction.transaction_id);
-                Ok(())
-            }
+            Type::Deposit => self.handle_deposit(transaction),
+            Type::Withdrawal => self.handle_withdrawals(transaction),
+            Type::Dispute => self.handle_dispute(transaction),
+            Type::Resolve => self.handle_resolve(transaction),
+            Type::Chargeback => self.handle_chargeback(transaction),
         }
+    }
+
+    fn handle_deposit(&mut self, transaction: Transaction) -> Result<(), EngineError> {
+        if self
+            .transactions_database
+            .contains_key(transaction.transaction_id)
+        {
+            return Err(EngineError::TransactionAlreadyExists);
+        }
+        if let Some(transaction_value) = transaction.amount {
+            let client = self
+                .clients
+                .entry(transaction.t_client_id)
+                .or_insert(ClientAccount::new());
+
+            client.deposit(transaction_value)?;
+
+            let transaction_t: TransactionType = (transaction.t_client_id, transaction_value);
+            self.transactions_database
+                .insert(transaction.transaction_id, transaction_t);
+            Ok(())
+        } else {
+            Err(EngineError::InvalidLeger(transaction.transaction_id))
+        }
+    }
+
+    fn handle_withdrawals(&mut self, transaction: Transaction) -> Result<(), EngineError> {
+        if self
+            .transactions_database
+            .contains_key(transaction.transaction_id)
+        {
+            return Err(EngineError::TransactionAlreadyExists);
+        }
+        if let Some(transaction_value) = transaction.amount {
+            let client = self
+                .clients
+                .entry(transaction.t_client_id)
+                .or_insert(ClientAccount::new());
+            client.withdrawal(transaction_value)?;
+            Ok(())
+        } else {
+            Err(EngineError::InvalidLeger(transaction.transaction_id))
+        }
+    }
+
+    fn handle_dispute(&mut self, transaction: Transaction) -> Result<(), EngineError> {
+        if self.disputes.contains(&transaction.transaction_id) {
+            return Err(EngineError::TransactionAlreadyDisputed(
+                transaction.transaction_id,
+            ));
+        }
+        self.handle_transaction_without_amount(
+            transaction.t_client_id,
+            transaction.transaction_id,
+            |c, a| c.dispute(a),
+        )?;
+        self.disputes.insert(transaction.transaction_id);
+        Ok(())
+    }
+
+    fn handle_resolve(&mut self, transaction: Transaction) -> Result<(), EngineError> {
+        if !self.disputes.contains(&transaction.transaction_id) {
+            return Err(EngineError::TransactionNotDisputed(
+                transaction.transaction_id,
+            ));
+        }
+        self.handle_transaction_without_amount(
+            transaction.t_client_id,
+            transaction.transaction_id,
+            |c, a| c.resolve(a),
+        )?;
+        self.disputes.remove(&transaction.transaction_id);
+        Ok(())
+    }
+
+    fn handle_chargeback(&mut self, transaction: Transaction) -> Result<(), EngineError> {
+        if !self.disputes.contains(&transaction.transaction_id) {
+            return Err(EngineError::TransactionNotDisputed(
+                transaction.transaction_id,
+            ));
+        }
+        self.handle_transaction_without_amount(
+            transaction.t_client_id,
+            transaction.transaction_id,
+            |c, a| c.chargeback(a),
+        )?;
+        self.disputes.remove(&transaction.transaction_id);
+        Ok(())
     }
 
     fn handle_transaction_without_amount<F>(
@@ -174,7 +128,7 @@ impl PaymentsEngine {
         action: F,
     ) -> Result<(), EngineError>
     where
-        F: FnOnce(&mut Client, Amount) -> Result<(), ClientAccountError>,
+        F: FnOnce(&mut ClientAccount, Amount) -> Result<(), ClientAccountError>,
     {
         if let Some(client) = self.clients.get_mut(&t_client_id) {
             if let Some((client_id_expected, amount)) =
@@ -226,49 +180,13 @@ pub mod tests {
 
     use super::*;
 
-    //TransactionsDatabase
-    #[test]
-    fn transaction_database() {
-        let t_client_id = 1;
-        let transaction_id = 1;
-        let amount = dec!(1.000);
-
-        let mut transactions_database = TransactionsDatabase::new();
-
-        let transaction: TransactionType = (t_client_id, amount);
-
-        transactions_database.insert(transaction_id, transaction);
-
-        let received_amout = transactions_database.get(transaction_id);
-
-        assert!(received_amout.is_some());
-        assert_eq!(received_amout.unwrap(), transaction);
-    }
-
-    #[test]
-    fn error_transaction_database() {
-        let t_client_id = 1;
-        let transaction_id = 1;
-        let amount = dec!(1.000);
-
-        let mut transactions_database = TransactionsDatabase::new();
-
-        let transaction: TransactionType = (t_client_id, amount);
-
-        transactions_database.insert(transaction_id, transaction);
-
-        let received_amout = transactions_database.get(100);
-
-        assert!(received_amout.is_none());
-    }
-
     #[test]
     fn handle_deposit_errors() {
         let mut payments_engine = PaymentsEngine::new();
 
         assert!(
             payments_engine
-                .handle_transaction(Transaction {
+                .handle_deposit(Transaction {
                     t_type: Type::Deposit,
                     t_client_id: 1,
                     transaction_id: 1,
@@ -279,31 +197,31 @@ pub mod tests {
 
         assert_eq!(
             payments_engine
-                .handle_transaction(Transaction {
+                .handle_deposit(Transaction {
                     t_type: Type::Deposit,
                     t_client_id: 1,
                     transaction_id: 1,
                     amount: Some(dec!(1.5050)),
                 })
                 .unwrap_err(),
-            EngineError::TransactionExists
+            EngineError::TransactionAlreadyExists
         );
 
         assert_eq!(
             payments_engine
-                .handle_transaction(Transaction {
+                .handle_deposit(Transaction {
                     t_type: Type::Deposit,
                     t_client_id: 1,
                     transaction_id: 2,
                     amount: None,
                 })
                 .unwrap_err(),
-            EngineError::InvalidTransaction(2)
+            EngineError::InvalidLeger(2)
         );
 
         assert_eq!(
             payments_engine
-                .handle_transaction(Transaction {
+                .handle_deposit(Transaction {
                     t_type: Type::Deposit,
                     t_client_id: 1,
                     transaction_id: 3,
@@ -320,7 +238,7 @@ pub mod tests {
 
         assert!(
             payments_engine
-                .handle_transaction(Transaction {
+                .handle_deposit(Transaction {
                     t_type: Type::Deposit,
                     t_client_id: 1,
                     transaction_id: 1,
@@ -331,43 +249,43 @@ pub mod tests {
 
         assert_eq!(
             payments_engine
-                .handle_transaction(Transaction {
+                .handle_deposit(Transaction {
                     t_type: Type::Deposit,
                     t_client_id: 1,
                     transaction_id: 1,
                     amount: Some(dec!(1.5050)),
                 })
                 .unwrap_err(),
-            EngineError::TransactionExists
+            EngineError::TransactionAlreadyExists
         );
 
         assert_eq!(
             payments_engine
-                .handle_transaction(Transaction {
+                .handle_withdrawals(Transaction {
                     t_type: Type::Withdrawal,
                     t_client_id: 1,
                     transaction_id: 1,
                     amount: None,
                 })
                 .unwrap_err(),
-            EngineError::TransactionExists
+            EngineError::TransactionAlreadyExists
         );
 
         assert_eq!(
             payments_engine
-                .handle_transaction(Transaction {
+                .handle_withdrawals(Transaction {
                     t_type: Type::Withdrawal,
                     t_client_id: 1,
                     transaction_id: 2,
                     amount: None,
                 })
                 .unwrap_err(),
-            EngineError::InvalidTransaction(2)
+            EngineError::InvalidLeger(2)
         );
 
         assert_eq!(
             payments_engine
-                .handle_transaction(Transaction {
+                .handle_withdrawals(Transaction {
                     t_type: Type::Withdrawal,
                     t_client_id: 1,
                     transaction_id: 3,
@@ -384,7 +302,7 @@ pub mod tests {
 
         assert!(
             payments_engine
-                .handle_transaction(Transaction {
+                .handle_deposit(Transaction {
                     t_type: Type::Deposit,
                     t_client_id: 1,
                     transaction_id: 1,
@@ -395,7 +313,7 @@ pub mod tests {
 
         assert!(
             payments_engine
-                .handle_transaction(Transaction {
+                .handle_dispute(Transaction {
                     t_type: Type::Dispute,
                     t_client_id: 1,
                     transaction_id: 1,
@@ -406,7 +324,7 @@ pub mod tests {
 
         assert_eq!(
             payments_engine
-                .handle_transaction(Transaction {
+                .handle_dispute(Transaction {
                     t_type: Type::Dispute,
                     t_client_id: 1,
                     transaction_id: 1,
@@ -418,7 +336,7 @@ pub mod tests {
 
         assert_eq!(
             payments_engine
-                .handle_transaction(Transaction {
+                .handle_dispute(Transaction {
                     t_type: Type::Dispute,
                     t_client_id: 2,
                     transaction_id: 3,
@@ -430,7 +348,7 @@ pub mod tests {
 
         assert_eq!(
             payments_engine
-                .handle_transaction(Transaction {
+                .handle_dispute(Transaction {
                     t_type: Type::Dispute,
                     t_client_id: 1,
                     transaction_id: 10,
@@ -447,7 +365,7 @@ pub mod tests {
 
         assert!(
             payments_engine
-                .handle_transaction(Transaction {
+                .handle_deposit(Transaction {
                     t_type: Type::Deposit,
                     t_client_id: 1,
                     transaction_id: 1,
@@ -458,7 +376,7 @@ pub mod tests {
 
         assert!(
             payments_engine
-                .handle_transaction(Transaction {
+                .handle_dispute(Transaction {
                     t_type: Type::Dispute,
                     t_client_id: 1,
                     transaction_id: 1,
@@ -469,7 +387,7 @@ pub mod tests {
 
         assert!(
             payments_engine
-                .handle_transaction(Transaction {
+                .handle_deposit(Transaction {
                     t_type: Type::Deposit,
                     t_client_id: 100,
                     transaction_id: 100,
@@ -480,7 +398,7 @@ pub mod tests {
 
         assert_eq!(
             payments_engine
-                .handle_transaction(Transaction {
+                .handle_resolve(Transaction {
                     t_type: Type::Resolve,
                     t_client_id: 100,
                     transaction_id: 1,
@@ -497,7 +415,7 @@ pub mod tests {
 
         assert!(
             payments_engine
-                .handle_transaction(Transaction {
+                .handle_deposit(Transaction {
                     t_type: Type::Deposit,
                     t_client_id: 1,
                     transaction_id: 1,
@@ -508,7 +426,7 @@ pub mod tests {
 
         assert!(
             payments_engine
-                .handle_transaction(Transaction {
+                .handle_dispute(Transaction {
                     t_type: Type::Dispute,
                     t_client_id: 1,
                     transaction_id: 1,
@@ -519,7 +437,7 @@ pub mod tests {
 
         assert_eq!(
             payments_engine
-                .handle_transaction(Transaction {
+                .handle_resolve(Transaction {
                     t_type: Type::Resolve,
                     t_client_id: 1,
                     transaction_id: 2,
@@ -531,12 +449,12 @@ pub mod tests {
     }
 
     #[test]
-    fn handle_basic_charge_errors() {
+    fn handle_basic_chargeback_errors() {
         let mut payments_engine = PaymentsEngine::new();
 
         assert!(
             payments_engine
-                .handle_transaction(Transaction {
+                .handle_deposit(Transaction {
                     t_type: Type::Deposit,
                     t_client_id: 1,
                     transaction_id: 1,
@@ -547,7 +465,7 @@ pub mod tests {
 
         assert!(
             payments_engine
-                .handle_transaction(Transaction {
+                .handle_dispute(Transaction {
                     t_type: Type::Dispute,
                     t_client_id: 1,
                     transaction_id: 1,
@@ -558,7 +476,7 @@ pub mod tests {
 
         assert_eq!(
             payments_engine
-                .handle_transaction(Transaction {
+                .handle_chargeback(Transaction {
                     t_type: Type::Chargeback,
                     t_client_id: 1,
                     transaction_id: 2,

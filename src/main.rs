@@ -1,5 +1,6 @@
 mod client;
-mod payments_engine;
+mod engine;
+mod storage;
 mod transaction;
 mod types;
 
@@ -9,8 +10,10 @@ use tokio::sync::Mutex;
 use clap::{Arg, ArgAction, Command};
 use tokio::task::JoinSet;
 
-static PAYMENTS_ENGINE: LazyLock<Arc<Mutex<payments_engine::PaymentsEngine>>> =
-    LazyLock::new(|| Arc::new(Mutex::new(payments_engine::PaymentsEngine::new())));
+use crate::engine::payments_engine::PaymentsEngine;
+
+static PAYMENTS_ENGINE: LazyLock<Arc<Mutex<PaymentsEngine>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(PaymentsEngine::new())));
 
 async fn start_transactions_service(filename: String) -> Result<(), ()> {
     let path = filename.trim();

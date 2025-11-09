@@ -1,27 +1,14 @@
-use crate::types::Amount;
+use crate::{client::error::ClientAccountError, types::Amount};
 use rust_decimal::Decimal;
-use thiserror::Error;
 
-#[derive(Error, Debug, Clone, PartialEq, Eq)]
-pub enum ClientAccountError {
-    #[error("Negative amount")]
-    NegativeAmount,
-
-    #[error("Insufficient available for withdrawal")]
-    InsufficientBalance,
-
-    #[error("Account is locked")]
-    Locked,
-}
-
-pub struct Client {
+pub struct ClientAccount {
     available: Amount,
     held: Amount,
     total: Amount,
     locked: bool,
 }
 
-impl Client {
+impl ClientAccount {
     pub fn new() -> Self {
         Self {
             available: Decimal::ZERO,
@@ -117,7 +104,7 @@ pub mod tests {
 
     #[test]
     fn client() {
-        let client = Client::new();
+        let client = ClientAccount::new();
 
         assert_eq!(client.available(), dec!(0_0000));
         assert_eq!(client.held(), dec!(0_0000));
@@ -127,7 +114,7 @@ pub mod tests {
 
     #[test]
     fn client_deposit() {
-        let mut client = Client::new();
+        let mut client = ClientAccount::new();
 
         assert!(client.deposit(dec!(1.5555)).is_ok());
         assert_eq!(client.available(), dec!(1.5555));
@@ -138,7 +125,7 @@ pub mod tests {
 
     #[test]
     fn client_deposit_error() {
-        let mut client = Client {
+        let mut client = ClientAccount {
             available: Decimal::ZERO,
             held: Decimal::ZERO,
             total: Decimal::ZERO,
@@ -158,7 +145,7 @@ pub mod tests {
 
     #[test]
     fn client_withdrawal() {
-        let mut client = Client::new();
+        let mut client = ClientAccount::new();
 
         assert!(client.deposit(dec!(1.5555)).is_ok());
 
@@ -183,7 +170,7 @@ pub mod tests {
 
     #[test]
     fn client_withdrawal_error() {
-        let mut client = Client {
+        let mut client = ClientAccount {
             available: dec!(1.0000),
             held: Decimal::ZERO,
             total: Decimal::ZERO,
@@ -207,7 +194,7 @@ pub mod tests {
 
     #[test]
     fn client_dispute() {
-        let mut client = Client::new();
+        let mut client = ClientAccount::new();
 
         assert!(client.deposit(dec!(1.5555)).is_ok());
 
@@ -226,7 +213,7 @@ pub mod tests {
 
     #[test]
     fn client_dispute_error() {
-        let mut client = Client {
+        let mut client = ClientAccount {
             available: Decimal::ZERO,
             held: Decimal::ZERO,
             total: Decimal::ZERO,
@@ -241,7 +228,7 @@ pub mod tests {
 
     #[test]
     fn client_resolve() {
-        let mut client = Client::new();
+        let mut client = ClientAccount::new();
 
         assert!(client.deposit(dec!(1.5555)).is_ok());
 
@@ -266,7 +253,7 @@ pub mod tests {
 
     #[test]
     fn client_resolve_error() {
-        let mut client = Client {
+        let mut client = ClientAccount {
             available: Decimal::ZERO,
             held: Decimal::ZERO,
             total: Decimal::ZERO,
@@ -281,7 +268,7 @@ pub mod tests {
 
     #[test]
     fn client_chargeback() {
-        let mut client = Client::new();
+        let mut client = ClientAccount::new();
 
         assert!(client.deposit(dec!(1.5555)).is_ok());
 

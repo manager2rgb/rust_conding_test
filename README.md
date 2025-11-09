@@ -14,8 +14,8 @@ Disputes of deposits can create negative available balance:
 
 ### 1.4 About efficiency
 The coding test mentions a scenario where the engine could be receiving streams from thousands of concurrent TCP connections.  
-For this exercise, I used a `LazyLock` holding a `PaymentsEngine` wrapped in `Arc<Mutex<…>>`.  
-In a real system, I would consider per-client locking, or lock-free data structures, but due to time constraints and because this is a coding test, I kept the concurrency model simple and safe.
+I wrapped internal data structures with `Arc<Mutex<…>>`.  
+In a real system, I would consider lock-free data structures, but due to time constraints and because this is a coding test, I kept the concurrency model simple and safe.
 
 
 ## 2 Design

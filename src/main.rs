@@ -4,18 +4,15 @@ mod storage;
 mod transaction;
 mod types;
 
-use std::sync::{Arc, LazyLock};
-use tokio::sync::Mutex;
-
 use clap::{Arg, ArgAction, Command};
 use tokio::task::JoinSet;
 
 use crate::engine::payments_engine::PaymentsEngine;
 
-static PAYMENTS_ENGINE: LazyLock<Arc<Mutex<PaymentsEngine>>> =
-    LazyLock::new(|| Arc::new(Mutex::new(PaymentsEngine::new())));
-
-async fn start_transactions_service(filename: String) -> Result<(), ()> {
+async fn start_transactions_service(
+    payments_engine: PaymentsEngine,
+    filename: String,
+) -> Result<(), ()> {
     let path = filename.trim();
 
     let metadata_file = std::fs::OpenOptions::new().read(true).open(path).unwrap();
@@ -31,15 +28,12 @@ async fn start_transactions_service(filename: String) -> Result<(), ()> {
 
     for transaction_result in iter {
         match transaction_result {
-            Ok(transaction) => {
-                let mut payments_engine = PAYMENTS_ENGINE.lock().await;
-                match payments_engine.handle_transaction(transaction) {
-                    Ok(_) => {}
-                    Err(err) => {
-                        eprintln!("Engine error : {}", err);
-                    }
+            Ok(transaction) => match payments_engine.handle_transaction(transaction).await {
+                Ok(_) => {}
+                Err(_err) => {
+                    //eprintln!("Engine error : {}", err);
                 }
-            }
+            },
             Err(err) => eprintln!("Error deserializing transaction: {}", err),
         }
     }
@@ -64,14 +58,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let filename = args.get_one::<String>("file").unwrap().clone();
 
+    let payments_engine = PaymentsEngine::new();
+
     let mut set = JoinSet::new();
-    set.spawn(start_transactions_service(filename));
-    //set.spawn(start_transactions_service("transactions.csv".to_string())); //Just to test if it work as expected
+    set.spawn(start_transactions_service(
+        payments_engine.clone(),
+        filename,
+    ));
+    // set.spawn(start_transactions_service(
+    //     payments_engine.clone(),
+    //     "transactions_large.csv".to_string(),
+    // )); // //Just to test if it work as expected
 
     set.join_all().await;
 
-    let payments_engine = PAYMENTS_ENGINE.lock().await;
-    match payments_engine.write_state() {
+    match payments_engine.write_state().await {
         Ok(output) => {
             print!("{}", output);
         }

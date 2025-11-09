@@ -1,5 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
+use std::sync::Arc;
+
+use tokio::sync::RwLock;
 
 use crate::storage::{TransactionType, TransactionsDatabase};
 use crate::transaction::{Transaction, Type};
@@ -8,41 +11,45 @@ use crate::{client::client_account::ClientAccount, client::error::ClientAccountE
 
 use crate::engine::error::EngineError;
 
+#[derive(Clone)]
 pub struct PaymentsEngine {
-    clients: HashMap<ClientId, ClientAccount>,
-    transactions_database: TransactionsDatabase,
-    disputes: HashSet<TransactionId>,
+    clients: Arc<RwLock<HashMap<ClientId, ClientAccount>>>,
+    transactions_database: Arc<RwLock<TransactionsDatabase>>,
+    disputes: Arc<RwLock<HashSet<TransactionId>>>,
 }
 
 impl PaymentsEngine {
     pub fn new() -> Self {
         Self {
-            clients: HashMap::new(),
-            transactions_database: TransactionsDatabase::new(),
-            disputes: HashSet::new(),
+            clients: Arc::new(RwLock::new(HashMap::new())),
+            transactions_database: Arc::new(RwLock::new(TransactionsDatabase::new())),
+            disputes: Arc::new(RwLock::new(HashSet::new())),
         }
     }
 
-    pub fn handle_transaction(&mut self, transaction: Transaction) -> Result<(), EngineError> {
+    pub async fn handle_transaction(&self, transaction: Transaction) -> Result<(), EngineError> {
         match transaction.t_type {
-            Type::Deposit => self.handle_deposit(transaction),
-            Type::Withdrawal => self.handle_withdrawals(transaction),
-            Type::Dispute => self.handle_dispute(transaction),
-            Type::Resolve => self.handle_resolve(transaction),
-            Type::Chargeback => self.handle_chargeback(transaction),
+            Type::Deposit => self.handle_deposit(transaction).await,
+            Type::Withdrawal => self.handle_withdrawals(transaction).await,
+            Type::Dispute => self.handle_dispute(transaction).await,
+            Type::Resolve => self.handle_resolve(transaction).await,
+            Type::Chargeback => self.handle_chargeback(transaction).await,
         }
     }
 
-    fn handle_deposit(&mut self, transaction: Transaction) -> Result<(), EngineError> {
+    async fn handle_deposit(&self, transaction: Transaction) -> Result<(), EngineError> {
         if self
             .transactions_database
+            .read()
+            .await
             .contains_key(transaction.transaction_id)
         {
             return Err(EngineError::TransactionAlreadyExists);
         }
         if let Some(transaction_value) = transaction.amount {
-            let client = self
-                .clients
+            let mut write_client_lock = self.clients.write().await;
+
+            let client = write_client_lock
                 .entry(transaction.t_client_id)
                 .or_insert(ClientAccount::new());
 
@@ -50,6 +57,8 @@ impl PaymentsEngine {
 
             let transaction_t: TransactionType = (transaction.t_client_id, transaction_value);
             self.transactions_database
+                .write()
+                .await
                 .insert(transaction.transaction_id, transaction_t);
             Ok(())
         } else {
@@ -57,18 +66,22 @@ impl PaymentsEngine {
         }
     }
 
-    fn handle_withdrawals(&mut self, transaction: Transaction) -> Result<(), EngineError> {
+    async fn handle_withdrawals(&self, transaction: Transaction) -> Result<(), EngineError> {
         if self
             .transactions_database
+            .read()
+            .await
             .contains_key(transaction.transaction_id)
         {
             return Err(EngineError::TransactionAlreadyExists);
         }
         if let Some(transaction_value) = transaction.amount {
-            let client = self
-                .clients
+            let mut write_client_lock = self.clients.write().await;
+
+            let client = write_client_lock
                 .entry(transaction.t_client_id)
                 .or_insert(ClientAccount::new());
+
             client.withdrawal(transaction_value)?;
             Ok(())
         } else {
@@ -76,8 +89,13 @@ impl PaymentsEngine {
         }
     }
 
-    fn handle_dispute(&mut self, transaction: Transaction) -> Result<(), EngineError> {
-        if self.disputes.contains(&transaction.transaction_id) {
+    async fn handle_dispute(&self, transaction: Transaction) -> Result<(), EngineError> {
+        if self
+            .disputes
+            .read()
+            .await
+            .contains(&transaction.transaction_id)
+        {
             return Err(EngineError::TransactionAlreadyDisputed(
                 transaction.transaction_id,
             ));
@@ -86,13 +104,22 @@ impl PaymentsEngine {
             transaction.t_client_id,
             transaction.transaction_id,
             |c, a| c.dispute(a),
-        )?;
-        self.disputes.insert(transaction.transaction_id);
+        )
+        .await?;
+        self.disputes
+            .write()
+            .await
+            .insert(transaction.transaction_id);
         Ok(())
     }
 
-    fn handle_resolve(&mut self, transaction: Transaction) -> Result<(), EngineError> {
-        if !self.disputes.contains(&transaction.transaction_id) {
+    async fn handle_resolve(&self, transaction: Transaction) -> Result<(), EngineError> {
+        if !self
+            .disputes
+            .read()
+            .await
+            .contains(&transaction.transaction_id)
+        {
             return Err(EngineError::TransactionNotDisputed(
                 transaction.transaction_id,
             ));
@@ -101,13 +128,22 @@ impl PaymentsEngine {
             transaction.t_client_id,
             transaction.transaction_id,
             |c, a| c.resolve(a),
-        )?;
-        self.disputes.remove(&transaction.transaction_id);
+        )
+        .await?;
+        self.disputes
+            .write()
+            .await
+            .remove(&transaction.transaction_id);
         Ok(())
     }
 
-    fn handle_chargeback(&mut self, transaction: Transaction) -> Result<(), EngineError> {
-        if !self.disputes.contains(&transaction.transaction_id) {
+    async fn handle_chargeback(&self, transaction: Transaction) -> Result<(), EngineError> {
+        if !self
+            .disputes
+            .read()
+            .await
+            .contains(&transaction.transaction_id)
+        {
             return Err(EngineError::TransactionNotDisputed(
                 transaction.transaction_id,
             ));
@@ -116,13 +152,17 @@ impl PaymentsEngine {
             transaction.t_client_id,
             transaction.transaction_id,
             |c, a| c.chargeback(a),
-        )?;
-        self.disputes.remove(&transaction.transaction_id);
+        )
+        .await?;
+        self.disputes
+            .write()
+            .await
+            .remove(&transaction.transaction_id);
         Ok(())
     }
 
-    fn handle_transaction_without_amount<F>(
-        &mut self,
+    async fn handle_transaction_without_amount<F>(
+        &self,
         t_client_id: ClientId,
         transaction_id: TransactionId,
         action: F,
@@ -130,9 +170,9 @@ impl PaymentsEngine {
     where
         F: FnOnce(&mut ClientAccount, Amount) -> Result<(), ClientAccountError>,
     {
-        if let Some(client) = self.clients.get_mut(&t_client_id) {
+        if let Some(client) = self.clients.write().await.get_mut(&t_client_id) {
             if let Some((client_id_expected, amount)) =
-                self.transactions_database.get(transaction_id)
+                self.transactions_database.read().await.get(transaction_id)
             {
                 if t_client_id == client_id_expected {
                     match action(client, amount) {
@@ -153,12 +193,12 @@ impl PaymentsEngine {
         }
     }
 
-    pub fn write_state(&self) -> Result<String, EngineError> {
+    pub async fn write_state(&self) -> Result<String, EngineError> {
         let mut buffer = String::new();
         writeln!(&mut buffer, "client,available,held,total,locked")
             .map_err(|_| EngineError::WriteBuffer)?;
 
-        for (id, client) in &self.clients {
+        for (id, client) in self.clients.read().await.iter() {
             writeln!(
                 &mut buffer,
                 "{},{:.4},{:.4},{:.4},{}",
@@ -180,9 +220,9 @@ pub mod tests {
 
     use super::*;
 
-    #[test]
-    fn handle_deposit_errors() {
-        let mut payments_engine = PaymentsEngine::new();
+    #[tokio::test]
+    async fn handle_deposit_errors() {
+        let payments_engine = PaymentsEngine::new();
 
         assert!(
             payments_engine
@@ -192,6 +232,7 @@ pub mod tests {
                     transaction_id: 1,
                     amount: Some(dec!(1.5050)),
                 })
+                .await
                 .is_ok()
         );
 
@@ -203,6 +244,7 @@ pub mod tests {
                     transaction_id: 1,
                     amount: Some(dec!(1.5050)),
                 })
+                .await
                 .unwrap_err(),
             EngineError::TransactionAlreadyExists
         );
@@ -215,6 +257,7 @@ pub mod tests {
                     transaction_id: 2,
                     amount: None,
                 })
+                .await
                 .unwrap_err(),
             EngineError::InvalidLeger(2)
         );
@@ -227,14 +270,15 @@ pub mod tests {
                     transaction_id: 3,
                     amount: Some(dec!(-1.5050)),
                 })
+                .await
                 .unwrap_err(),
             EngineError::ClientAccountError(ClientAccountError::NegativeAmount)
         );
     }
 
-    #[test]
-    fn handle_withdrawals_errors() {
-        let mut payments_engine = PaymentsEngine::new();
+    #[tokio::test]
+    async fn handle_withdrawals_errors() {
+        let payments_engine = PaymentsEngine::new();
 
         assert!(
             payments_engine
@@ -244,6 +288,7 @@ pub mod tests {
                     transaction_id: 1,
                     amount: Some(dec!(1.5050)),
                 })
+                .await
                 .is_ok()
         );
 
@@ -255,6 +300,7 @@ pub mod tests {
                     transaction_id: 1,
                     amount: Some(dec!(1.5050)),
                 })
+                .await
                 .unwrap_err(),
             EngineError::TransactionAlreadyExists
         );
@@ -267,6 +313,7 @@ pub mod tests {
                     transaction_id: 1,
                     amount: None,
                 })
+                .await
                 .unwrap_err(),
             EngineError::TransactionAlreadyExists
         );
@@ -279,6 +326,7 @@ pub mod tests {
                     transaction_id: 2,
                     amount: None,
                 })
+                .await
                 .unwrap_err(),
             EngineError::InvalidLeger(2)
         );
@@ -291,14 +339,15 @@ pub mod tests {
                     transaction_id: 3,
                     amount: Some(dec!(5)),
                 })
+                .await
                 .unwrap_err(),
             EngineError::ClientAccountError(ClientAccountError::InsufficientBalance)
         );
     }
 
-    #[test]
-    fn handle_basic_dispute_errors() {
-        let mut payments_engine = PaymentsEngine::new();
+    #[tokio::test]
+    async fn handle_basic_dispute_errors() {
+        let payments_engine = PaymentsEngine::new();
 
         assert!(
             payments_engine
@@ -308,6 +357,7 @@ pub mod tests {
                     transaction_id: 1,
                     amount: Some(dec!(1.5050)),
                 })
+                .await
                 .is_ok()
         );
 
@@ -319,6 +369,7 @@ pub mod tests {
                     transaction_id: 1,
                     amount: None,
                 })
+                .await
                 .is_ok()
         );
 
@@ -330,6 +381,7 @@ pub mod tests {
                     transaction_id: 1,
                     amount: None,
                 })
+                .await
                 .unwrap_err(),
             EngineError::TransactionAlreadyDisputed(1)
         );
@@ -342,6 +394,7 @@ pub mod tests {
                     transaction_id: 3,
                     amount: None,
                 })
+                .await
                 .unwrap_err(),
             EngineError::ClientNotFound
         );
@@ -354,14 +407,15 @@ pub mod tests {
                     transaction_id: 10,
                     amount: None,
                 })
+                .await
                 .unwrap_err(),
             EngineError::TransactionNotFound(10)
         );
     }
 
-    #[test]
-    fn dispute_not_client_owned_transaction() {
-        let mut payments_engine = PaymentsEngine::new();
+    #[tokio::test]
+    async fn dispute_not_client_owned_transaction() {
+        let payments_engine = PaymentsEngine::new();
 
         assert!(
             payments_engine
@@ -371,6 +425,7 @@ pub mod tests {
                     transaction_id: 1,
                     amount: Some(dec!(1.5050)),
                 })
+                .await
                 .is_ok()
         );
 
@@ -382,6 +437,7 @@ pub mod tests {
                     transaction_id: 1,
                     amount: None,
                 })
+                .await
                 .is_ok()
         );
 
@@ -393,6 +449,7 @@ pub mod tests {
                     transaction_id: 100,
                     amount: Some(dec!(1.5050)),
                 })
+                .await
                 .is_ok()
         );
 
@@ -404,14 +461,15 @@ pub mod tests {
                     transaction_id: 1,
                     amount: None,
                 })
+                .await
                 .unwrap_err(),
             EngineError::NotClientOwnedTransaction(1, 100)
         );
     }
 
-    #[test]
-    fn handle_basic_resolve_errors() {
-        let mut payments_engine = PaymentsEngine::new();
+    #[tokio::test]
+    async fn handle_basic_resolve_errors() {
+        let payments_engine = PaymentsEngine::new();
 
         assert!(
             payments_engine
@@ -421,6 +479,7 @@ pub mod tests {
                     transaction_id: 1,
                     amount: Some(dec!(1.5050)),
                 })
+                .await
                 .is_ok()
         );
 
@@ -432,6 +491,7 @@ pub mod tests {
                     transaction_id: 1,
                     amount: None,
                 })
+                .await
                 .is_ok()
         );
 
@@ -443,14 +503,15 @@ pub mod tests {
                     transaction_id: 2,
                     amount: None,
                 })
+                .await
                 .unwrap_err(),
             EngineError::TransactionNotDisputed(2)
         );
     }
 
-    #[test]
-    fn handle_basic_chargeback_errors() {
-        let mut payments_engine = PaymentsEngine::new();
+    #[tokio::test]
+    async fn handle_basic_chargeback_errors() {
+        let payments_engine = PaymentsEngine::new();
 
         assert!(
             payments_engine
@@ -460,6 +521,7 @@ pub mod tests {
                     transaction_id: 1,
                     amount: Some(dec!(1.5050)),
                 })
+                .await
                 .is_ok()
         );
 
@@ -471,6 +533,7 @@ pub mod tests {
                     transaction_id: 1,
                     amount: None,
                 })
+                .await
                 .is_ok()
         );
 
@@ -482,6 +545,7 @@ pub mod tests {
                     transaction_id: 2,
                     amount: None,
                 })
+                .await
                 .unwrap_err(),
             EngineError::TransactionNotDisputed(2)
         );

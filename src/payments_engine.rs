@@ -93,8 +93,7 @@ impl PaymentsEngine {
                         .entry(transaction.t_client_id)
                         .or_insert(Client::new());
 
-                    client
-                        .deposit(transaction_value)?;
+                    client.deposit(transaction_value)?;
 
                     let transaction_t: TransactionType =
                         (transaction.t_client_id, transaction_value);
@@ -117,8 +116,7 @@ impl PaymentsEngine {
                         .clients
                         .entry(transaction.t_client_id)
                         .or_insert(Client::new());
-                    client
-                        .withdrawal(transaction_value)?;
+                    client.withdrawal(transaction_value)?;
                     Ok(())
                 } else {
                     Err(EngineError::InvalidTransaction(transaction.transaction_id))

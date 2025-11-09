@@ -77,7 +77,7 @@ pub mod tests {
         assert_eq!(client.available(), dec!(0_0000));
         assert_eq!(client.held(), dec!(0_0000));
         assert_eq!(client.total(), dec!(0_0000));
-        assert_eq!(client.locked(), false);
+        assert!(!client.locked());
     }
 
     #[test]
@@ -88,7 +88,7 @@ pub mod tests {
         assert_eq!(client.available(), dec!(1.5555));
         assert_eq!(client.held(), dec!(0_0000));
         assert_eq!(client.total(), dec!(1.5555));
-        assert_eq!(client.locked(), false);
+        assert!(!client.locked());
     }
 
     #[test]
@@ -101,19 +101,19 @@ pub mod tests {
         assert_eq!(client.available(), dec!(1.000));
         assert_eq!(client.held(), dec!(0_0000));
         assert_eq!(client.total(), dec!(1.0000));
-        assert_eq!(client.locked(), false);
+        assert!(!client.locked());
 
         client.withdrawal(dec!(0.9999));
         assert_eq!(client.available(), dec!(0.0001));
         assert_eq!(client.held(), dec!(0_0000));
         assert_eq!(client.total(), dec!(0.0001));
-        assert_eq!(client.locked(), false);
+        assert!(!client.locked());
 
         client.withdrawal(dec!(0.0002)); //insufficient money
         assert_eq!(client.available(), dec!(0.0001));
         assert_eq!(client.held(), dec!(0_0000));
         assert_eq!(client.total(), dec!(0.0001));
-        assert_eq!(client.locked(), false);
+        assert!(!client.locked());
     }
 
     #[test]
@@ -126,13 +126,13 @@ pub mod tests {
         assert_eq!(client.available(), dec!(1.0000));
         assert_eq!(client.held(), dec!(0.5555));
         assert_eq!(client.total(), dec!(1.5555));
-        assert_eq!(client.locked(), false);
+        assert!(!client.locked());
 
         client.withdrawal(dec!(0.9999));
         assert_eq!(client.available(), dec!(0.0001));
         assert_eq!(client.held(), dec!(0.5555));
         assert_eq!(client.total(), dec!(0.5556));
-        assert_eq!(client.locked(), false);
+        assert!(!client.locked());
     }
 
     #[test]
@@ -145,19 +145,19 @@ pub mod tests {
         assert_eq!(client.available(), dec!(1.0000));
         assert_eq!(client.held(), dec!(0.5555));
         assert_eq!(client.total(), dec!(1.5555));
-        assert_eq!(client.locked(), false);
+        assert!(!client.locked());
 
         client.withdrawal(dec!(0.9999));
         assert_eq!(client.available(), dec!(0.0001));
         assert_eq!(client.held(), dec!(0.5555));
         assert_eq!(client.total(), dec!(0.5556));
-        assert_eq!(client.locked(), false);
+        assert!(!client.locked());
 
         client.resolve(dec!(0.5555));
         assert_eq!(client.available(), dec!(0.5556));
         assert_eq!(client.held(), dec!(0.0000));
         assert_eq!(client.total(), dec!(0.5556));
-        assert_eq!(client.locked(), false);
+        assert!(!client.locked());
     }
 
     #[test]
@@ -170,18 +170,18 @@ pub mod tests {
         assert_eq!(client.available(), dec!(1.0000));
         assert_eq!(client.held(), dec!(0.5555));
         assert_eq!(client.total(), dec!(1.5555));
-        assert_eq!(client.locked(), false);
+        assert!(!client.locked());
 
         client.withdrawal(dec!(0.9999));
         assert_eq!(client.available(), dec!(0.0001));
         assert_eq!(client.held(), dec!(0.5555));
         assert_eq!(client.total(), dec!(0.5556));
-        assert_eq!(client.locked(), false);
+        assert!(!client.locked());
 
         client.chargeback(dec!(0.5555));
         assert_eq!(client.available(), dec!(0.0001));
         assert_eq!(client.held(), dec!(0.0000));
         assert_eq!(client.total(), dec!(0.0001));
-        assert_eq!(client.locked(), true);
+        assert!(client.locked());
     }
 }

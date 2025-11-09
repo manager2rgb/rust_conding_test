@@ -7,17 +7,16 @@ use clap::{Arg, ArgAction, Command};
 
 use payments_engine::PaymentsEngine;
 
-use transaction::Transaction;
-
-async fn start_transactions_service(filename: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn start_transactions_service(filename: &str) -> Result<(), Box<dyn std::error::Error>> {
     let path = filename.trim();
 
     let metadata_file = std::fs::OpenOptions::new().read(true).open(path)?;
     let buffered = std::io::BufReader::new(metadata_file);
 
     let mut rdr = csv::ReaderBuilder::new()
-        .trim(csv::Trim::All) //Whitespaces and decimal precisions (up to four places past the decimal) must be accepted by your program.
+        .trim(csv::Trim::All) //Whitespaces must be accepted
         .delimiter(b',')
+        .flexible(true)
         .from_reader(buffered);
 
     let iter = rdr.deserialize();
@@ -25,16 +24,17 @@ async fn start_transactions_service(filename: &str) -> Result<(), Box<dyn std::e
     let mut payments_engine = PaymentsEngine::new();
 
     for transaction_result in iter {
-        let transaction: Transaction = transaction_result.unwrap();
-        payments_engine.handle_transaction(transaction);
+        match transaction_result {
+            Ok(transaction) => payments_engine.handle_transaction(transaction),
+            Err(e) => eprintln!("Failed to parse transaction: {:?}", e),
+        }
     }
     let output = payments_engine.write_state();
     print!("{}", output);
     Ok(())
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut parser = Command::new("Payments Engine");
     parser = parser.arg(
         Arg::new("file")
@@ -51,7 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let filename = args.get_one::<String>("file").unwrap();
 
-    start_transactions_service(filename).await?;
+    start_transactions_service(filename)?;
 
     Ok(())
 }

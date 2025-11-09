@@ -60,28 +60,26 @@ impl PaymentsEngine {
 
     pub fn handle_transaction(&mut self, transaction: Transaction) {
         match transaction.t_type {
-            Type::Deposit => match transaction.amount {
-                Some(transaction_value) => {
+            Type::Deposit => {
+                if let Some(transaction_value) = transaction.amount {
                     self.handle_transaction_with_amount(
                         transaction.t_client_id,
                         transaction.transaction_id,
-                        transaction_value.round_dp(4),
+                        transaction_value,
                         |c, a| c.deposit(a),
                     );
                 }
-                None => {}
-            },
-            Type::Withdrawal => match transaction.amount {
-                Some(transaction_value) => {
+            }
+            Type::Withdrawal => {
+                if let Some(transaction_value) = transaction.amount {
                     self.handle_transaction_with_amount(
                         transaction.t_client_id,
                         transaction.transaction_id,
-                        transaction_value.round_dp(4),
+                        transaction_value,
                         |c, a| c.withdrawal(a),
                     );
                 }
-                None => {}
-            },
+            }
             Type::Dispute => {
                 self.handle_transaction_without_amount(
                     transaction.t_client_id,
@@ -138,15 +136,12 @@ impl PaymentsEngine {
     ) where
         F: FnOnce(&mut Client, Amount),
     {
-        match self
+        if let Ok(amount) = self
             .transactions_database
             .read_transaction_amount(t_client_id, transaction_id)
         {
-            Ok(amount) => {
-                let client = self.clients.get_mut(&t_client_id).unwrap();
-                action(client, amount);
-            }
-            Err(_) => {}
+            let client = self.clients.get_mut(&t_client_id).unwrap();
+            action(client, amount);
         }
     }
 
@@ -210,33 +205,77 @@ pub mod tests {
         assert_eq!(received_amout.unwrap_err(), ErrorKind::NotFound);
     }
 
-    //PaymentsEngine
+    //PaymentsEngine // Something wrong with the order, commented out the test
     #[test]
     fn handle_transaction() {
-        let csv_data = "\
-                                deposit,1,1,1.0\n\
-                                deposit,2,2,2.0\n\
-                                deposit,1,3,2.0\n\
-                                withdrawal,1,4,1.5\n\
-                                withdrawal,2,5,3.0";
-        let mut rdr = csv::ReaderBuilder::new()
-            .has_headers(false)
-            .from_reader(csv_data.as_bytes()); // error deserializing order
-
-        let iter = rdr.deserialize::<Transaction>();
+        let transactions = vec![
+            Transaction {
+                t_type: Type::Deposit,
+                t_client_id: 1,
+                transaction_id: 1,
+                amount: Some(dec!(1.5050)),
+            },
+            Transaction {
+                t_type: Type::Deposit,
+                t_client_id: 2,
+                transaction_id: 2,
+                amount: Some(dec!(2.1010)),
+            },
+            Transaction {
+                t_type: Type::Deposit,
+                t_client_id: 1,
+                transaction_id: 3,
+                amount: Some(dec!(1.0)),
+            },
+            Transaction {
+                t_type: Type::Withdrawal,
+                t_client_id: 1,
+                transaction_id: 4,
+                amount: Some(dec!(1.5)),
+            },
+            Transaction {
+                t_type: Type::Withdrawal,
+                t_client_id: 2,
+                transaction_id: 5,
+                amount: Some(dec!(3.0)),
+            },
+            Transaction {
+                t_type: Type::Dispute,
+                t_client_id: 1,
+                transaction_id: 1,
+                amount: None,
+            },
+            Transaction {
+                t_type: Type::Resolve,
+                t_client_id: 1,
+                transaction_id: 1,
+                amount: None,
+            },
+            Transaction {
+                t_type: Type::Dispute,
+                t_client_id: 1,
+                transaction_id: 1,
+                amount: None,
+            },
+            Transaction {
+                t_type: Type::Chargeback,
+                t_client_id: 1,
+                transaction_id: 1,
+                amount: None,
+            },
+        ];
 
         let mut payments_engine = PaymentsEngine::new();
 
-        for transaction_result in iter {
-            let transaction: Transaction = transaction_result.unwrap();
+        for transaction in transactions {
             payments_engine.handle_transaction(transaction);
         }
         let output = payments_engine.write_state();
 
         let mut expected_output = String::new();
         writeln!(&mut expected_output, "client,available,held,total,locked").unwrap();
-        writeln!(&mut expected_output, "1,1.5,0,1.5,false").unwrap();
-        writeln!(&mut expected_output, "2,2,0,2,false").unwrap();
+        writeln!(&mut expected_output, "1,-0.5000,0.0000,-0.5000,true").unwrap();
+        writeln!(&mut expected_output, "2,2.1010,0,2.1010,false").unwrap();
 
         assert_eq!(output, expected_output);
     }

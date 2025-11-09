@@ -37,6 +37,10 @@ where
     if let Some(v) = opt {
         if v.is_sign_negative() {
             return Err(serde::de::Error::custom("amount must be non-negative"));
+        } else if v.scale() > 4 {
+            return Err(serde::de::Error::custom(
+                "amount must be up to four decimals",
+            ));
         }
         Ok(Some(v))
     } else {
@@ -101,13 +105,8 @@ pub mod tests {
             .has_headers(false)
             .from_reader(csv_data.as_bytes());
 
-        let expected_amount_4_decimal = dec!(10.5556);
         let transaction = rdr.deserialize::<Transaction>().next().unwrap();
-        assert!(transaction.is_ok());
-
-        let amount_4_decimal = transaction.unwrap().amount.unwrap().round_dp(4);
-
-        assert_eq!(expected_amount_4_decimal, amount_4_decimal);
+        assert!(transaction.is_err());
     }
 
     #[test]
@@ -120,10 +119,6 @@ pub mod tests {
 
         assert!(transaction.is_err());
         let transaction_error = transaction.unwrap_err();
-        println!(
-            "Erro while deserializing transaction: {} ",
-            transaction_error
-        );
         let expected_error_kind_position = &Position::new();
         let postition = transaction_error.kind().position().unwrap();
         assert_eq!(postition, expected_error_kind_position);
